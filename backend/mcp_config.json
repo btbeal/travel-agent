@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+      "reservation-agent": {
+        "command": "python",
+        "args": ["mcp_server.py"],
+        "cwd": "/Users/brennanbeal/code/trip-planner/backend",
+        "env": {
+          "PYTHONPATH": "/Users/brennanbeal/code/trip-planner/backend"
+        }
+      }
+    }
+  }
