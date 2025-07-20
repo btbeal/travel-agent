@@ -575,6 +575,14 @@ async def get_all_reservations_endpoint():
     """Direct endpoint to get all reservations (current and past)."""
     return await get_user_reservations_tool(only_open_reservations=False)
 
+@app.post("/api/reset-context")
+async def reset_context():
+    """Reset the restaurant context and clear all stored restaurant information."""
+    global restaurant_context
+    restaurant_context = RestaurantContext()
+    logger.info("Restaurant context reset")
+    return {"status": "success", "message": "Context reset successfully"}
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""

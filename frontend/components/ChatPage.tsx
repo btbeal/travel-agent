@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useRef, useEffect } from 'react'
-import { Send, Bot, User, Calendar, MapPin, Clock, Star } from 'lucide-react'
+import { Send, Bot, User, Calendar, MapPin, Clock, Star, RotateCcw } from 'lucide-react'
 import axios from 'axios'
 
 interface ChatMessage {
@@ -29,6 +29,7 @@ export default function ChatPage() {
   ])
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isResetting, setIsResetting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -38,6 +39,39 @@ export default function ChatPage() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  const resetChat = async () => {
+    if (isResetting) return
+    
+    setIsResetting(true)
+    try {
+      // Reset the backend context
+      await axios.post(`${API_BASE}/api/reset-context`)
+      
+      // Reset the frontend state
+      setMessages([
+        {
+          role: 'assistant',
+          content: 'Hello! I\'m your restaurant reservation assistant. I can help you find restaurants, check availability, and get booking information. What would you like to do today?',
+          timestamp: new Date()
+        }
+      ])
+      setInputMessage('')
+    } catch (error) {
+      console.error('Error resetting chat:', error)
+      // Still reset the frontend even if backend reset fails
+      setMessages([
+        {
+          role: 'assistant',
+          content: 'Hello! I\'m your restaurant reservation assistant. I can help you find restaurants, check availability, and get booking information. What would you like to do today?',
+          timestamp: new Date()
+        }
+      ])
+      setInputMessage('')
+    } finally {
+      setIsResetting(false)
+    }
+  }
 
   const sendMessage = async () => {
     if (!inputMessage.trim() || isLoading) return
@@ -217,14 +251,25 @@ export default function ChatPage() {
     <div className="flex flex-col h-screen max-w-4xl mx-auto">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 p-4 shadow-sm">
-        <div className="flex items-center space-x-3">
-          <div className="p-2 bg-blue-100 rounded-lg">
-            <Bot className="w-6 h-6 text-blue-600" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Bot className="w-6 h-6 text-blue-600" />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold text-gray-900">Restaurant Assistant</h1>
+              <p className="text-sm text-gray-500">Find restaurants, check availability, and manage reservations</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-semibold text-gray-900">Restaurant Assistant</h1>
-            <p className="text-sm text-gray-500">Find restaurants, check availability, and manage reservations</p>
-          </div>
+          <button
+            onClick={resetChat}
+            disabled={isResetting || isLoading}
+            className="flex items-center space-x-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Reset chat and clear context"
+          >
+            <RotateCcw className={`w-4 h-4 ${isResetting ? 'animate-spin' : ''}`} />
+            <span>Reset Chat</span>
+          </button>
         </div>
       </div>
 
@@ -291,11 +336,11 @@ export default function ChatPage() {
             placeholder="Ask me about restaurants, availability, or your reservations..."
             className="flex-1 p-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             rows={2}
-            disabled={isLoading}
+            disabled={isLoading || isResetting}
           />
           <button
             onClick={sendMessage}
-            disabled={isLoading || !inputMessage.trim()}
+            disabled={isLoading || isResetting || !inputMessage.trim()}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
             <Send className="w-4 h-4" />
