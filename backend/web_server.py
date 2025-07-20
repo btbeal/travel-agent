@@ -368,6 +368,8 @@ async def chat_with_assistant(request: ChatRequest):
                 "role": "system",
                 "content": f"""You are a friendly restaurant reservation assistant with access to tools to help the user book a restaurant.
 
+                Todays date is {datetime.now().strftime("%Y-%m-%d")}
+
 Your job is to find out all the details about a users reservation preference, and then use those tools to book a restaurant.
 
 TYPICAL WORKFLOWS:
