@@ -20,33 +20,24 @@ interface FunctionCall {
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000'
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      role: 'assistant',
+      content: 'Hello! I\'m your restaurant reservation assistant. I can help you find restaurants, check availability, and get booking information. What would you like to do today?',
+      timestamp: new Date()
+    }
+  ])
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [mounted, setMounted] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-
-  // Initialize component on mount to prevent hydration issues
-  useEffect(() => {
-    setMounted(true)
-    setMessages([
-      {
-        role: 'assistant',
-        content: 'Hello! I\'m your restaurant reservation assistant. I can help you find restaurants, check availability, and get booking information. What would you like to do today?',
-        timestamp: new Date()
-      }
-    ])
-  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
   useEffect(() => {
-    if (mounted) {
-      scrollToBottom()
-    }
-  }, [messages, mounted])
+    scrollToBottom()
+  }, [messages])
 
   const sendMessage = async () => {
     if (!inputMessage.trim() || isLoading) return
@@ -155,7 +146,7 @@ export default function ChatPage() {
                   {result.available_dates.slice(0, 6).map((date: string, index: number) => (
                     <div key={index} className="flex items-center p-2 bg-green-50 rounded text-sm">
                       <Calendar className="w-3 h-3 text-green-600 mr-1" />
-                      {mounted ? new Date(date).toLocaleDateString() : date}
+                      {new Date(date).toLocaleDateString()}
                     </div>
                   ))}
                 </div>
@@ -204,9 +195,7 @@ export default function ChatPage() {
                         {reservation.venue?.name || 'Restaurant'}
                       </h3>
                       <p className="text-sm text-gray-600">
-                        {reservation.date?.start ? 
-                          (mounted ? new Date(reservation.date.start).toLocaleString() : reservation.date.start) 
-                          : 'Date TBD'}
+                        {reservation.date?.start ? new Date(reservation.date.start).toLocaleString() : 'Date TBD'}
                       </p>
                       <p className="text-xs text-gray-500">
                         Party of {reservation.party_size || 'N/A'}
@@ -222,49 +211,6 @@ export default function ChatPage() {
       default:
         return null
     }
-  }
-
-  // Show loading state until component is mounted
-  if (!mounted) {
-    return (
-      <div className="flex flex-col h-screen max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="bg-white border-b border-gray-200 p-4 shadow-sm">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <Bot className="w-6 h-6 text-blue-600" />
-            </div>
-            <div>
-              <h1 className="text-xl font-semibold text-gray-900">Restaurant Assistant</h1>
-              <p className="text-sm text-gray-500">Find restaurants, check availability, and manage reservations</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Loading state */}
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-gray-500">Loading...</div>
-        </div>
-
-        {/* Input placeholder */}
-        <div className="border-t border-gray-200 p-4 bg-white">
-          <div className="flex space-x-2">
-            <textarea
-              placeholder="Ask me about restaurants, availability, or your reservations..."
-              className="flex-1 p-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              rows={2}
-              disabled
-            />
-            <button
-              disabled
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg opacity-50 cursor-not-allowed flex items-center justify-center"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-    )
   }
 
   return (
@@ -307,7 +253,7 @@ export default function ChatPage() {
                       {renderFunctionResult(functionCall)}
                     </div>
                   ))}
-                  <p className="text-xs mt-2 opacity-70" suppressHydrationWarning>
+                  <p className="text-xs mt-2 opacity-70">
                     {message.timestamp.toLocaleTimeString()}
                   </p>
                 </div>

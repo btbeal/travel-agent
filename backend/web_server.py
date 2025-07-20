@@ -18,10 +18,8 @@ from reservation_tools import (
     get_timeslots_and_associated_booking_tokens,
 )
 
-# Load environment variables
 load_dotenv()
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -43,6 +41,9 @@ app.add_middleware(
 
 # Initialize OpenAI client
 openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Simple cache for function results (in production, use Redis or similar)
+function_cache = {}
 
 # Request/Response Models
 class ChatMessage(BaseModel):
@@ -101,6 +102,12 @@ async def search_restaurants_tool(query: str, n_results: int = 5, filter_dict: O
                 }
                 venues.append(venue_info)
         
+        if venues:
+            logger.info(f"Found {len(venues)} venues. Remember to use resy_id field for availability checks.")
+            if venues and len(venues) > 0:
+                first_venue = venues[0]
+                logger.info(f"First venue: name='{first_venue.get('name', 'N/A')}', resy_id='{first_venue.get('resy_id', 'N/A')}'")
+        
         return {
             "query": query,
             "venues": venues,
@@ -115,6 +122,11 @@ async def search_restaurants_tool(query: str, n_results: int = 5, filter_dict: O
 async def check_availability_tool(venue_id: str, current_date: str, num_seats: int = 2) -> Dict[str, Any]:
     """Check available dates for a specific venue."""
     logger.info(f"Checking availability for venue {venue_id} starting {current_date}")
+    
+    if not venue_id.isdigit():
+        error_msg = f"Invalid venue_id: '{venue_id}'. Expected a numeric ID (resy_id) from search results, not a restaurant name."
+        logger.error(error_msg)
+        raise HTTPException(status_code=400, detail=error_msg)
     
     try:
         available_dates = await asyncio.to_thread(get_available_dates, venue_id, current_date, num_seats)
@@ -135,6 +147,11 @@ async def check_availability_tool(venue_id: str, current_date: str, num_seats: i
 async def get_time_slots_tool(venue_id: str, date: str, num_seats: int = 2, lat: float = 0.0, long: float = 0.0) -> Dict[str, Any]:
     """Get available time slots and booking tokens for a specific date and venue."""
     logger.info(f"Getting time slots for venue {venue_id} on {date}")
+    
+    if not venue_id.isdigit():
+        error_msg = f"Invalid venue_id: '{venue_id}'. Expected a numeric ID (resy_id) from search results, not a restaurant name."
+        logger.error(error_msg)
+        raise HTTPException(status_code=400, detail=error_msg)
     
     try:
         timeslots = await asyncio.to_thread(
@@ -170,12 +187,12 @@ async def get_time_slots_tool(venue_id: str, date: str, num_seats: int = 2, lat:
         logger.error(f"Error getting time slots: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get time slots: {str(e)}")
 
-async def get_current_reservations_tool() -> Dict[str, Any]:
-    """Get all current (open) reservations for the user."""
-    logger.info("Fetching current reservations")
+async def get_user_reservations_tool(only_open_reservations: bool = True) -> Dict[str, Any]:
+    """Get all reservations for the user either open or closed or all."""
+    logger.info("Fetching all reservations")
     
     try:
-        reservations = await asyncio.to_thread(get_all_reservations, only_open_reservations=True)
+        reservations = await asyncio.to_thread(get_all_reservations, only_open_reservations)
         
         return {
             "reservations": reservations,
@@ -186,12 +203,12 @@ async def get_current_reservations_tool() -> Dict[str, Any]:
         logger.error(f"Error fetching reservations: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch reservations: {str(e)}")
 
-# OpenAI function definitions
+
 AVAILABLE_FUNCTIONS = {
     "search_restaurants": search_restaurants_tool,
     "check_availability": check_availability_tool,
     "get_time_slots": get_time_slots_tool,
-    "get_current_reservations": get_current_reservations_tool,
+    "get_user_reservations_tool": get_user_reservations_tool,
 }
 
 FUNCTION_DEFINITIONS = [
@@ -199,7 +216,7 @@ FUNCTION_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "search_restaurants",
-            "description": "Search for restaurants and venues using semantic similarity. Use descriptive terms like 'Italian restaurants', 'romantic date spots', 'casual lunch places', etc.",
+            "description": "Search for restaurants and venues using semantic similarity. Use descriptive terms like 'Italian restaurants', 'romantic date spots', 'casual lunch places', etc. Each result includes a 'resy_id' field that must be used for subsequent availability checks.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -226,13 +243,13 @@ FUNCTION_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "check_availability",
-            "description": "Check available dates for a specific venue. Use this after finding a restaurant to see when they have availability.",
+            "description": "Check available dates for a specific venue. Use this after finding a restaurant to see when they have availability. IMPORTANT: Use the 'resy_id' field from search results as the venue_id parameter, not the restaurant name. Workflow: 1) Search for restaurant, 2) Extract resy_id from results, 3) Use resy_id as venue_id here.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "venue_id": {
                         "type": "string",
-                        "description": "The Resy venue ID from search results"
+                        "description": "The Resy venue ID (resy_id) from search results. This should be a numeric string like '12345', not the restaurant name. Must be extracted from previous search_restaurants results."
                     },
                     "current_date": {
                         "type": "string",
@@ -252,13 +269,13 @@ FUNCTION_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_time_slots",
-            "description": "Get available time slots and booking tokens for a specific date and venue. Use this to see specific available times after checking general availability.",
+            "description": "Get available time slots and booking tokens for a specific date and venue. Use this to see specific available times after checking general availability. IMPORTANT: Use the 'resy_id' field from search results as the venue_id parameter, not the restaurant name.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "venue_id": {
                         "type": "string",
-                        "description": "The Resy venue ID"
+                        "description": "The Resy venue ID (resy_id) from search results. This should be a numeric string like '12345', not the restaurant name."
                     },
                     "date": {
                         "type": "string",
@@ -287,16 +304,52 @@ FUNCTION_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "get_current_reservations",
-            "description": "Get all current (upcoming) reservations for the user. Use this to see what reservations are already booked.",
+            "name": "get_user_reservations_tool",
+            "description": "Get all reservations for the user or just current (upcoming) reservations based on user preference. Use this to see what reservations are already booked or have been booked in the past.",
             "parameters": {
                 "type": "object",
-                "properties": {},
-                "required": []
+                "properties": {
+                    "only_open_reservations": {
+                        "type": "boolean",
+                        "description": "Whether to only return open (future) reservations (default: True)",
+                        "default": True
+                    }
+                },
+                "required": ["only_open_reservations"]
             }
         }
     }
 ]
+
+# Add this after the imports
+class RestaurantContext:
+    def __init__(self):
+        self.identified_restaurants = {}  # name -> {resy_id, name, type, neighborhood, etc.}
+    
+    def add_restaurant(self, name: str, resy_id: str, **details):
+        """Add a restaurant to the context."""
+        self.identified_restaurants[name.lower()] = {
+            "resy_id": resy_id,
+            "name": name,
+            **details
+        }
+    
+    def get_restaurant(self, name: str):
+        """Get restaurant info by name."""
+        return self.identified_restaurants.get(name.lower())
+    
+    def get_context_summary(self):
+        """Get a summary of identified restaurants for the AI."""
+        if not self.identified_restaurants:
+            return ""
+        
+        summary = "\n\nPREVIOUSLY IDENTIFIED RESTAURANTS:\n"
+        for name, info in self.identified_restaurants.items():
+            summary += f"- {info['name']} (resy_id: {info['resy_id']}, type: {info.get('type', 'N/A')}, neighborhood: {info.get('neighborhood', 'N/A')})\n"
+        return summary
+
+# Add this as a global variable
+restaurant_context = RestaurantContext()
 
 # API Endpoints
 @app.post("/api/chat", response_model=ChatResponse)
@@ -307,99 +360,190 @@ async def chat_with_assistant(request: ChatRequest):
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
     
     try:
-        # Build conversation history
+        # Get context summary for previously identified restaurants
+        context_summary = restaurant_context.get_context_summary()
+        
         messages = [
             {
                 "role": "system",
-                "content": """You are a helpful restaurant reservation assistant. You can help users:
-1. Search for restaurants based on cuisine, location, occasion, etc.
-2. Check availability for specific venues
-3. Get available time slots for booking
-4. View their current reservations
+                "content": f"""You are a friendly restaurant reservation assistant with access to tools to help the user book a restaurant.
 
-Always be helpful and provide clear, actionable information. When showing restaurant options, include key details like name, type, neighborhood, and rating. When showing availability, present dates and times in a user-friendly format.
+Your job is to find out all the details about a users reservation preference, and then use those tools to book a restaurant.
 
-If a user asks about booking, explain that you can show available time slots and booking tokens, but the actual booking would need to be completed through Resy or the restaurant directly."""
+TYPICAL WORKFLOWS:
+1. User asks about a restaurant → search_restaurants() to find relevant restaurants and then check_availability() for each if needed
+2. User asks for availability → search_restaurants() → check_availability() → get_time_slots()
+3. User asks for times → search_restaurants() → check_availability() → get_time_slots()
+
+CRITICAL RULES:
+- Always use resy_id from search results, never restaurant names
+- If you search and find venues, automatically check availability for the most relevant ones
+- If you check availability and find dates, offer to get specific times
+- Show key details: name, type, neighborhood, rating
+- Explain booking tokens are for Resy booking
+
+CONTEXT AWARENESS:
+- If the user mentions a restaurant that's already been identified, use its resy_id directly
+- DO NOT search again for restaurants that are already in the context
+- Only search for new restaurants when the user asks about a restaurant not previously discussed{context_summary}
+
+Example workflow:
+User: "I want to book at Gertrudes"
+1. search_restaurants("Gertrudes") 
+2. Extract resy_id from results
+3. check_availability(venue_id="12345", current_date="2024-01-15")
+4. If dates available, get_time_slots(venue_id="12345", date="2024-01-15")
+
+User: "What times are available for Gertrudes?" (after previous search)
+1. Use Gertrudes resy_id from context
+2. check_availability(venue_id="12345", current_date="2024-01-15") 
+3. get_time_slots(venue_id="12345", date="2024-01-15")"""
             }
         ]
+
+        max_history = 10 
+        recent_history = request.conversation_history[-max_history:] if len(request.conversation_history) > max_history else request.conversation_history
         
-        # Add conversation history
-        for msg in request.conversation_history:
-            messages.append({"role": msg.role, "content": msg.content})
-        
-        # Add the new user message
+        # Filter out any system messages from conversation history to avoid duplicates
+        for msg in recent_history:
+            if msg.role != "system":  # Only add non-system messages
+                messages.append({"role": msg.role, "content": msg.content})
+
         messages.append({"role": "user", "content": request.message})
+
+        # Multi-step workflow execution - one tool call at a time
+        max_iterations = 5  # Prevent infinite loops
+        iteration = 0
+        all_function_calls = []
         
-        # Call OpenAI with function calling
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(f"Workflow iteration {iteration}")
+            
+            response = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                tools=FUNCTION_DEFINITIONS,
+                tool_choice="auto",
+                temperature=0.7,
+                max_tokens=800 
+            )
+            
+            assistant_message = response.choices[0].message
+            
+            # If no tool calls, we're done
+            if not assistant_message.tool_calls:
+                break
+            
+            # Execute only the first tool call (one at a time)
+            tool_call = assistant_message.tool_calls[0]
+            if tool_call.type != "function":
+                break
+                
+            function_name = tool_call.function.name
+            function_args = json.loads(tool_call.function.arguments)
+            
+            logger.info(f"Executing function: {function_name} with args: {function_args}")
+    
+            if function_name == "check_availability":
+                logger.info(f"AVAILABILITY CHECK - venue_id: '{function_args.get('venue_id', 'NOT_FOUND')}' (type: {type(function_args.get('venue_id', 'NOT_FOUND'))})")
+            elif function_name == "search_restaurants":
+                logger.info(f"SEARCH REQUEST - query: '{function_args.get('query', 'NOT_FOUND')}'")
+            
+            if function_name in AVAILABLE_FUNCTIONS:
+                try:
+                    # Check cache for search results (cache for 5 minutes)
+                    cache_key = f"{function_name}:{json.dumps(function_args, sort_keys=True)}"
+                    current_time = datetime.now().timestamp()
+                    
+                    if function_name == "search_restaurants" and cache_key in function_cache:
+                        cache_entry = function_cache[cache_key]
+                        if current_time - cache_entry["timestamp"] < 300:  # 5 minutes
+                            logger.info(f"Using cached result for {function_name}")
+                            function_result = cache_entry["result"]
+                        else:
+                            # Cache expired, remove it
+                            del function_cache[cache_key]
+                            function_result = await AVAILABLE_FUNCTIONS[function_name](**function_args)
+                            function_cache[cache_key] = {"result": function_result, "timestamp": current_time}
+                    else:
+                        function_result = await AVAILABLE_FUNCTIONS[function_name](**function_args)
+                        if function_name == "search_restaurants":
+                            function_cache[cache_key] = {"result": function_result, "timestamp": current_time}
+                    
+                    all_function_calls.append({
+                        "name": function_name,
+                        "arguments": function_args,
+                        "result": function_result
+                    })
+                    
+                    # Add the assistant message with tool call
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [tool_call.dict()]
+                    })
+
+                    # Add the tool result
+                    result_content = json.dumps(function_result)
+                    if len(result_content) > 2000: 
+                        truncated_result = function_result.copy()
+                        if 'venues' in truncated_result and len(truncated_result['venues']) > 3:
+                            truncated_result['venues'] = truncated_result['venues'][:3]
+                            truncated_result['count'] = len(truncated_result['venues'])
+                            truncated_result['_truncated'] = True
+                        result_content = json.dumps(truncated_result)
+                    
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": result_content
+                    })
+                    
+                    logger.info(f"Completed function {function_name}, continuing workflow...")
+                    
+                    # In the function execution loop, add this after successful search_restaurants calls:
+                    if function_name == "search_restaurants" and function_result.get("venues"):
+                        # Store restaurant information in context
+                        for venue in function_result["venues"]:
+                            restaurant_context.add_restaurant(
+                                name=venue["name"],
+                                resy_id=venue["resy_id"],
+                                type=venue.get("type", ""),
+                                neighborhood=venue.get("neighborhood", ""),
+                                rating=venue.get("rating", 0)
+                            )
+
+                except Exception as e:
+                    logger.error(f"Error calling function {function_name}: {str(e)}")
+                    all_function_calls.append({
+                        "name": function_name,
+                        "arguments": function_args,
+                        "result": {"error": str(e)}
+                    })
+                    # Add error to messages and break
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps({"error": str(e)})
+                    })
+                    break
+            else:
+                logger.warning(f"Unknown function: {function_name}")
+                break
+        
+        # Generate final response
+        final_response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=messages,
-            tools=FUNCTION_DEFINITIONS,
-            tool_choice="auto",
             temperature=0.7,
-            max_tokens=1000
+            max_tokens=500
         )
         
-        assistant_message = response.choices[0].message
-        function_calls = []
-        
-        # Handle function calls if any
-        if assistant_message.tool_calls:
-            for tool_call in assistant_message.tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
-                
-                logger.info(f"Calling function: {function_name} with args: {function_args}")
-                
-                if function_name in AVAILABLE_FUNCTIONS:
-                    try:
-                        # Call the function
-                        function_result = await AVAILABLE_FUNCTIONS[function_name](**function_args)
-                        function_calls.append({
-                            "name": function_name,
-                            "arguments": function_args,
-                            "result": function_result
-                        })
-                        
-                        # Add function result to conversation for final response
-                        messages.append({
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [tool_call.dict()]
-                        })
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": json.dumps(function_result)
-                        })
-                        
-                    except Exception as e:
-                        logger.error(f"Error calling function {function_name}: {str(e)}")
-                        function_calls.append({
-                            "name": function_name,
-                            "arguments": function_args,
-                            "result": {"error": str(e)}
-                        })
-            
-            # Get final response after function calls
-            final_response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            return ChatResponse(
-                message=final_response.choices[0].message.content,
-                function_calls=function_calls
-            )
-        
-        else:
-            # No function calls, return the assistant's message directly
-            return ChatResponse(
-                message=assistant_message.content or "I'm here to help with restaurant reservations!",
-                function_calls=[]
-            )
+        return ChatResponse(
+            message=final_response.choices[0].message.content,
+            function_calls=all_function_calls
+        )
             
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}")
@@ -424,7 +568,12 @@ async def get_time_slots_endpoint(request: TimeslotRequest):
 @app.get("/api/current-reservations")
 async def get_current_reservations_endpoint():
     """Direct endpoint to get current reservations."""
-    return await get_current_reservations_tool()
+    return await get_user_reservations_tool(only_open_reservations=True)
+
+@app.get("/api/all-reservations")
+async def get_all_reservations_endpoint():
+    """Direct endpoint to get all reservations (current and past)."""
+    return await get_user_reservations_tool(only_open_reservations=False)
 
 @app.get("/api/health")
 async def health_check():
